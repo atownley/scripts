@@ -1,0 +1,103 @@
+#! /usr/bin/env ruby
+######################################################################
+#
+# Copyright 2015, Andrew S. Townley
+#
+# Permission to use, copy, modify, and disribute this software for
+# any purpose with or without fee is hereby granted, provided that
+# the above copyright notices and this permission notice appear in
+# all copies.
+#
+# THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHORS DISCLAIM ALL
+# WARRANTIES WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED
+# WARRANTIES OF MERCHANTABILITY AND FITNESS.  IN NO EVENT SHALL THE
+# AUTHORS BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT OR
+# CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
+# LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT,
+# NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
+# CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+#
+# Created:  Wed Aug 26 12:29:55 BRT 2015
+# Description:
+#
+#   What this script does is automatically handle/extract
+#   encrypted data and attachments that can't be otherwise
+#   extracted using Mail.app + LetterOpener, etc.
+#
+#   NOTE:  I'm sure there's a way with Ruby's PCKS7 module to do
+#   all of this in ruby, but I don't have time to figure it out
+#   right now, nor does the documentation explain much about
+#   this process.
+#
+#   For now, we're going to do it quick & dirty:
+#
+#     openssl smime -decrypt -in smime.p7m -inform DER \
+#               -verify -noverify -out smime.dat
+#
+#######################################################################
+
+require 'rubygems'
+require 'mail'
+require 'digest/md5'
+
+class File
+  # from http://www.ruby-forum.com/topic/140101
+
+  def self.canonical_path(path)
+    # Cheating to avoid starting with the relative path
+    newpath = File.expand_path(path)
+    while newpath.gsub!(%r{([^/]+)/\.\./?}) { |match|
+        $1 == '..' ? match : ''
+        } do end
+    newpath.gsub(%r{/\./}, '/').sub(%r{/\.\z}, '/')
+  end
+end
+
+mf = File.canonical_path(ARGV.shift)
+hxd = Digest::MD5.hexdigest(File.read(mf))
+destdir = "/tmp/#{hxd}"
+puts "output: #{destdir}"
+
+if !Dir.exist? destdir
+  Dir.mkdir destdir
+end
+
+# check if it's a p7m file
+if mf =~ /p7m$/
+  # extract into the directory using the openssl command
+  system "openssl smime -decrypt -in #{mf} -inform DER -verify -noverify -out #{destdir}/smime.dat"
+  mf = File.join(destdir, "smime.dat")
+end
+
+# now we try and extract any attachments
+mail = Mail.read(mf)
+puts mail.parts.map { |p| puts p.content_type }
+
+# Write the body
+if mail.html_part
+  body = mail.html_part
+  fn = "body.html"
+else
+  body = mail.text_part
+  fn = "body.txt"
+end
+
+begin
+  File.open(File.join(destdir, fn), "w+b", 0644) do |f|
+    f.write(body.decoded)
+  end
+end
+
+mail.attachments.each do |a|
+  fn = a.filename || "data"
+  begin
+    File.open(File.join(destdir, fn), "w+b", 0644) do |f|
+      f.write(a.body.decoded)
+    end
+  rescue => e
+    puts "error: #{e.message}"
+  end
+end
+
+# open the directory in Finder
+system "open #{destdir}"
